@@ -1,4 +1,4 @@
-#!/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
 # odf2txt - Convert ODF documents to text
@@ -153,6 +153,7 @@ no_break_after = [
   'jr.',
   'sr.',
   'vs.',
+  'para.',
 ]
 
 defined_styles = {}
@@ -160,6 +161,58 @@ inline_styles = {}
 inline_styles_parents = {}
 
 args = None
+
+def flush_break_sentences(indent_level, text):
+  #Sometimes copy/pasted windows text produces inline carriage returns
+  text = text.replace('\r', '')
+  if not args.break_sentences:
+    sys.stdout.write(text.encode('utf-8'))
+    return
+
+    # Split at sentence breaks that are identifiably not abbreviations
+  def breakLine(match):
+    match_text = match.group(0)
+    
+    # Don't break before markup tags
+    match_end = match.end(0) + 1
+    if match_end < len(match.string) and match.string[match_end] != '<':
+      return match_text
+    
+    if match_text[-1] == ' ':
+      match_text = match_text[0:-1]
+      
+    return match_text 
+
+  content = break_at.sub(breakLine, text)
+
+  # Split at periods, except after non-breaking words
+  n = 0
+  indent = ''
+  indented = ' ' * indent_level
+  while True:
+    n = content.find('. ', n)
+    if n < 0:
+      break
+    
+    first_part = content[0:n + 1]
+    first_part_lower = first_part.lower()
+
+    # Check if period ends a non-breaking word
+    for nb in no_break_after:
+      if n > len(nb) and first_part_lower.endswith(nb):
+        first_part = None
+        break
+      
+    # Split content and print part before split
+    if first_part is not None:
+      sys.stdout.write("%s%s\n" % (indent, first_part.encode('utf-8')))
+      content = content[n + 2:]
+      n = 0
+      indent = indented
+    n += 2
+
+  # Write remaining content
+  sys.stdout.write("%s%s" % (indent, content.encode('utf-8')))
 
 #------------------------------------------------------------------------------
 class context_parser(xml.sax.ContentHandler):
@@ -491,9 +544,9 @@ class simple_content_parser(xml.sax.ContentHandler):
   #----------------------------------------------------------------------------
   def endElement(self, name):
     if name == 'text:p' or name == 'text:h':
-      print '\n'
+      sys.stdout.write('\n')
     elif name == 'text:list':
-      print '\n'
+      sys.stdout.write('\n')
       self.indent_level -= 2
     elif name == 'text:s':
       sys.stdout.write(' ')
@@ -504,7 +557,7 @@ class simple_content_parser(xml.sax.ContentHandler):
 
   #----------------------------------------------------------------------------
   def characters(self, content):
-    sys.stdout.write(content.encode('utf-8'))
+    flush_break_sentences(self.indent_level, content)
 
 #------------------------------------------------------------------------------
 def print_tag_start(name, attrs):
@@ -692,54 +745,8 @@ class styled_content_parser(simple_content_parser):
     if append is not None:
       self.text += append
 
-    if not args.break_sentences:
-      sys.stdout.write(self.text.encode('utf-8'))
-      self.text = ''
-      return
-
-    # Split at sentence breaks that are identifiably not abbreviations
-    def breakLine(match):
-      match_text = match.group(0)
-
-      # Don't break before markup tags
-      match_end = match.end(0) + 1
-      if match_end < len(match.string) and match.string[match_end] != '<':
-        return match_text
-
-      if match_text[-1] == ' ':
-        match_text = match_text[0:-1]
-
-      return match_text + '\n'
-
-    content = break_at.sub(breakLine, self.text)
-
-    # Split at periods, except after non-breaking words
-    n = 0
-    while True:
-      n = content.find('. ', n)
-      if n < 0:
-        break
-
-      first_part = content[0:n + 1]
-      first_part_lower = first_part.lower()
-
-      # Check if period ends a non-breaking word
-      for nb in no_break_after:
-        if n > len(nb) and first_part_lower.endswith(nb):
-          first_part = None
-          break
-
-      # Split content and print part before split
-      if first_part is not None:
-        print first_part.encode('utf-8')
-        content = content[n + 2:]
-        n = 0
-
-      n += 2
-
-    # Write remaining content
-    sys.stdout.write(content.encode('utf-8'))
-    self.text = ''
+    flush_break_sentences(self.indent_level, self.text)
+    self.text = '';
 
 #------------------------------------------------------------------------------
 def print_raw(archive, filename):
